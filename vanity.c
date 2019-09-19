@@ -1,6 +1,9 @@
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "ecdsa.h"
 #include "rand.h"
@@ -9,7 +12,7 @@
 #include "sha3.h"
 
 
-void dumpBuffer(uint8_t *buffer, uint8_t length) {
+static void dumpBuffer(uint8_t *buffer, uint8_t length) {
     printf("0x");
     for (uint8_t i = 0; i < length; i++) {
         printf("%02x", buffer[i]);
@@ -17,29 +20,67 @@ void dumpBuffer(uint8_t *buffer, uint8_t length) {
     printf("\n");
 }
 
-void showUsage() {
-    printf("Usage:\n");
-    printf("    vanity-contract PATTERN\n");
+static void showUsage() {
+    fprintf(stderr, "Usage:\n");
+    fprintf(stderr, "    vanity-contract PATTERN [-s <show speed every N iters>] [-f <num processes>]\n");
+}
+
+static unsigned long long currTimeMicros() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (unsigned long long)tv.tv_sec * 1000000 + tv.tv_usec;
 }
 
 int main(int argc, char **argv) {
+    long speedIters = 0;
+    long numProcs = 1;
+
+    int opt;
+
+    while ((opt = getopt(argc, argv, "s:f:")) != -1) {
+        switch (opt) {
+          case 's':
+            speedIters = atol(optarg);
+            break;
+          case 'f':
+            numProcs = atol(optarg);
+            break;
+          default:
+            showUsage();
+            return 1;
+        }
+    }
+
     setlinebuf(stdout);
 
-    if (argc != 2) {
+    if (numProcs < 1 || speedIters < 0 || optind >= argc) {
         showUsage();
         return 1;
     }
 
-    uint32_t patternLength = strlen(argv[1]);
+    uint32_t patternLength = strlen(argv[optind]);
     if (patternLength > 40) {
         showUsage();
-        printf("Error: PATTERN must be 40 characters or less\n");
+        fprintf(stderr, "Error: PATTERN must be 40 characters or less\n");
         return 1;
+    }
+
+    pid_t p;
+
+    for (long i=0; i<numProcs; i++) {
+        p = fork();
+        if (p < 0) return -1;
+        if (p == 0) break;
+    }
+
+    if (p) {
+         for (long i=0; i<numProcs; i++) wait(NULL);
+         return 1;
     }
 
     uint8_t pattern[40];
     for (uint8_t i = 0; i < patternLength; i++) {
-        uint8_t c = argv[1][i];
+        uint8_t c = argv[optind][i];
         if (c >= 0x30 && c <= 0x39) {
             pattern[i] = c - 0x30;
         } else if (c >=0x41 && c <= 0x46) {
@@ -48,12 +89,12 @@ int main(int argc, char **argv) {
             pattern[i] = c - 0x61 + 10;
         } else {
             showUsage();
-            printf("Error: Invalid character at position %d: \"%c\"\n", i, c);
+            fprintf(stderr, "Error: Invalid character at position %d: \"%c\"\n", i, c);
             return 1;
         }
     }
 
-    time_t lastTime = time(NULL);
+    unsigned long long lastTime = currTimeMicros();
 
     // Start with any random private key
     uint8_t privateKey[32];
@@ -87,7 +128,7 @@ int main(int argc, char **argv) {
     uint8_t hash[32];
 
 
-    uint32_t count = 0;
+    long count = 0;
     while (1) {
 
         // Compute the public key (k * curve.G)
@@ -139,11 +180,11 @@ int main(int argc, char **argv) {
 
         // A little bit of an update so we know what's happening
         count++;
-        if (count % 100000 == 0) {
-            time_t now = time(NULL);
-            float dt = now - lastTime;
+        if (speedIters && count % speedIters == 0) {
+            unsigned long long now = currTimeMicros();
+            double speed = (double)speedIters / ((now - lastTime) / 1000000.0);
             lastTime = now;
-            //printf("Tried=%d Speed=%f a/s\n", count, 100000.0 / dt);
+            printf("[%d] Tried=%ld Speed=%f a/s\n", getpid(), count, speed);
         }
 
         // Increment the private key
