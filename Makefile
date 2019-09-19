@@ -1,7 +1,17 @@
-default: vanity
+W        = -Wall
+OPT      = -O3 -g
+CCFLAGS  = $(OPT) $(W) $(XCCFLAGS)
+
+SRCS     = bignum.c ecdsa.c rand.c secp256k1.c sha3.c vanity.c
+
+
+.PHONY: all clean
+
 all: vanity
 
-vanity.o: bignum.c ecdsa.c rand.c secp256k1.c sha3.c vanity.c
+clean:
+	rm -f *.o vanity
 
-vanity: bignum.o ecdsa.o rand.o secp256k1.o sha3.o vanity.o
-  
+
+vanity: $(SRCS) Makefile
+	$(CC) $(CCFLAGS) $(SRCS) -o vanity
